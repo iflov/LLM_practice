@@ -1,0 +1,26 @@
+# Minimal requirements for POC
+# POC를 위한 최소한의 의존성
+
+# Core
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# SSE support
+sse-starlette==1.8.2
+
+# HTTP client for OpenRouter
+httpx==0.25.2
+
+# Logging
+structlog==23.2.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Optional: Agent frameworks (설치 시 주석 해제)
+# langchain==0.1.0
+# langchain-openai==0.0.5
