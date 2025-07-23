@@ -3,11 +3,44 @@ Model Management API endpoints
 모델 목록 조회 및 관리
 """
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+from datetime import datetime
 from app.services.model_manager import model_manager, ModelStatus
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+    supports_tools: bool
+    is_free: bool
+    priority: int
+    context_length: Optional[int] = None
+    status: Optional[str] = None
+    consecutive_errors: Optional[int] = None
+    rate_limit_retry_after: Optional[str] = None
+
+
+class ModelsListResponse(BaseModel):
+    total: int
+    models: List[ModelInfo]
+
+
+class AvailableModelsResponse(BaseModel):
+    total: int
+    require_tools: bool
+    models: List[ModelInfo]
+
+
+class CurrentModelResponse(BaseModel):
+    id: str
+    name: str
+    supports_tools: bool
+    is_free: bool
+    context_length: int
+    selection_criteria: Dict[str, Any]
 
 
 class ModelStatusUpdate(BaseModel):
@@ -15,71 +48,72 @@ class ModelStatusUpdate(BaseModel):
     action: str  # "enable", "disable", "reset"
 
 
-@router.get("/list")
-async def list_all_models() -> Dict[str, List[Dict[str, Any]]]:
+@router.get("/list", response_model=ModelsListResponse)
+async def list_all_models() -> ModelsListResponse:
     """등록된 모든 모델 목록 조회"""
     models_info = []
     
     for model in model_manager.models:
-        models_info.append({
-            "id": model.id,
-            "name": model.name,
-            "supports_tools": model.supports_tools,
-            "is_free": model.is_free,
-            "priority": model.priority,
-            "context_length": model.context_length,
-            "status": model.status.value,
-            "consecutive_errors": model.consecutive_errors,
-            "rate_limit_retry_after": model.rate_limit_retry_after.isoformat() if model.rate_limit_retry_after else None
-        })
+        models_info.append(ModelInfo(
+            id=model.id,
+            name=model.name,
+            supports_tools=model.supports_tools,
+            is_free=model.is_free,
+            priority=model.priority,
+            context_length=model.context_length,
+            status=model.status.value,
+            consecutive_errors=model.consecutive_errors,
+            rate_limit_retry_after=model.rate_limit_retry_after.isoformat() if model.rate_limit_retry_after else None
+        ))
     
-    return {
-        "total": len(models_info),
-        "models": sorted(models_info, key=lambda x: x["priority"])
-    }
+    return ModelsListResponse(
+        total=len(models_info),
+        models=sorted(models_info, key=lambda x: x.priority)
+    )
 
 
-@router.get("/available")
-async def get_available_models(require_tools: bool = False) -> Dict[str, List[Dict[str, Any]]]:
+@router.get("/available", response_model=AvailableModelsResponse)
+async def get_available_models(require_tools: bool = False) -> AvailableModelsResponse:
     """현재 사용 가능한 모델 목록"""
     available = model_manager.get_available_models(require_tools=require_tools)
     
     models_info = []
     for model in available:
-        models_info.append({
-            "id": model.id,
-            "name": model.name,
-            "supports_tools": model.supports_tools,
-            "is_free": model.is_free,
-            "priority": model.priority
-        })
+        models_info.append(ModelInfo(
+            id=model.id,
+            name=model.name,
+            supports_tools=model.supports_tools,
+            is_free=model.is_free,
+            priority=model.priority,
+            context_length=model.context_length
+        ))
     
-    return {
-        "total": len(models_info),
-        "require_tools": require_tools,
-        "models": models_info
-    }
+    return AvailableModelsResponse(
+        total=len(models_info),
+        require_tools=require_tools,
+        models=models_info
+    )
 
 
-@router.get("/current")
-async def get_current_model(require_tools: bool = False, prefer_free: bool = True) -> Dict[str, Any]:
+@router.get("/current", response_model=CurrentModelResponse)
+async def get_current_model(require_tools: bool = False, prefer_free: bool = True) -> CurrentModelResponse:
     """현재 선택될 최적 모델 정보"""
     model = model_manager.get_best_model(require_tools=require_tools, prefer_free=prefer_free)
     
     if not model:
         raise HTTPException(status_code=503, detail="No available models found")
     
-    return {
-        "id": model.id,
-        "name": model.name,
-        "supports_tools": model.supports_tools,
-        "is_free": model.is_free,
-        "context_length": model.context_length,
-        "selection_criteria": {
+    return CurrentModelResponse(
+        id=model.id,
+        name=model.name,
+        supports_tools=model.supports_tools,
+        is_free=model.is_free,
+        context_length=model.context_length,
+        selection_criteria={
             "require_tools": require_tools,
             "prefer_free": prefer_free
         }
-    }
+    )
 
 
 @router.post("/status")
