@@ -69,3 +69,6 @@ Thumbs.db
 /models/
 tmp/
 temp/
+
+*.db
+.python-version
