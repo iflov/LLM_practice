@@ -1,68 +1,97 @@
-from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# ASGI 서버 - FastAPI 앱을 실행하기 위한 서버
+from contextlib import asynccontextmanager
 import uvicorn
-# 설정 관리 - 환경변수와 설정값들을 중앙에서 관리
-from src.core.config import settings
-# 구조화된 로깅 - JSON 형태로 로그를 남겨 모니터링과 디버깅을 용이하게 함
-from src.core.logging import setup_logging, get_logger
+import structlog
 
-setup_logging(settings.log_level)
-logger = get_logger(__name__)
+from app.core.config import settings
+from app.models.database import init_db
+from app.services.session_manager import session_manager
+from app.routers import chat, models
+# from app.routers import chat_simple  # save_message 함수가 없어서 임시 주석처리
 
-# Lifespan context manager - FastAPI의 새로운 lifecycle 관리 방식
+
+# Configure structured logging
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.processors.JSONRenderer()
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
+logger = structlog.get_logger()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting LLM Agent Server", 
-                app_name=settings.app_name,
-                environment=settings.app_env)
+    """Manage application lifecycle"""
+    # Startup
+    logger.info("Starting Agent LLM POC server")
     
-    # Initialize Agent Manager
-    from src.agents.manager import get_agent_manager
-    agent_manager = await get_agent_manager()
-    logger.info("Agent Manager initialized")
+    # Initialize database
+    await init_db()
+    logger.info("Database initialized")
     
-    # TODO: 여기에 DB 연결, Redis 연결 등 초기화 작업 추가 예정
+    # Connect to Redis
+    await session_manager.connect()
+    logger.info("Redis connected")
     
-    yield  # 애플리케이션 실행
+    yield
     
-    # Shutdown - 서버 종료 시 실행
-    logger.info("Shutting down LLM Agent Server")
+    # Shutdown
+    logger.info("Shutting down Agent LLM POC server")
     
-    # Cleanup Agent Manager
-    if agent_manager:
-        await agent_manager.shutdown()
-    
-    # TODO: 여기에 DB 연결 해제, 열린 연결 정리 등 정리 작업 추가 예정
+    # Disconnect from Redis
+    await session_manager.disconnect()
+    logger.info("Redis disconnected")
 
 
-# FastAPI 애플리케이션 인스턴스 생성
+# Create FastAPI app
 app = FastAPI(
-    title=settings.app_name,  # API 문서에 표시될 제목
-    version="0.1.0",  # API 버전 관리
-    description="LLM Agent Backend Server with OpenRouter integration",  # API 설명
-    lifespan=lifespan  # lifespan 이벤트 핸들러 등록
+    title=settings.app_name,
+    description="LLM Agent with Tool Calling using OpenRouter",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
-# CORS 설정 - 프론트엔드(예: React)에서 API 호출할 수 있도록 설정
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,  # 허용할 프론트엔드 도메인 목록
-    allow_credentials=True,  # 쿠키/인증 정보 포함 허용
-    allow_methods=["*"],  # 모든 HTTP 메소드 허용 (GET, POST, PUT, DELETE 등)
-    allow_headers=["*"],  # 모든 헤더 허용
+    allow_origins=["*"],  # Configure properly for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# API 라우터 등록
-from src.api.chat import router as chat_router
-app.include_router(chat_router)
+# Include routers
+app.include_router(chat.router)
+app.include_router(models.router)
+# app.include_router(chat_simple.router)  # save_message 함수가 없어서 임시 주석처리
 
 
-# 헬스체크 엔드포인트 - 서버가 정상 작동하는지 확인용
-# 로드밸런서나 쿠버네티스 등에서 서버 상태 모니터링에 사용
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Agent LLM POC API",
+        "docs": "/docs",
+        "redoc": "/redoc"
+    }
+
+
 @app.get("/health")
 async def health_check():
+    """Health check endpoint"""
     return {
         "status": "healthy",
         "app": settings.app_name,
@@ -70,12 +99,10 @@ async def health_check():
     }
 
 
-# 직접 실행 시에만 작동 (python main.py)
-# 프로덕션에서는 보통 gunicorn이나 다른 ASGI 서버를 사용
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",  # 실행할 앱 경로 (모듈명:앱인스턴스)
-        host=settings.app_host,  # 서버가 바인딩할 호스트 (0.0.0.0 = 모든 인터페이스)
-        port=settings.app_port,  # 서버 포트
-        reload=settings.app_env == "development"  # 개발 환경에서만 코드 변경 시 자동 재시작
-    ) 
+        "main:app",
+        host="0.0.0.0",
+        port=8002,
+        reload=settings.app_env == "development"
+    )

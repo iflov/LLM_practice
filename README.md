@@ -1,223 +1,119 @@
-# LLM Agent Backend Server
+# Agent LLM POC
 
-> Agent 기반 LLM 백엔드 서버 POC (Proof of Concept) 프로젝트
+FastAPI 기반 LLM Agent 시스템 POC (Tool Calling 지원)
 
-## 🎯 프로젝트 개요
+## 특징
 
-이 프로젝트는 OpenRouter를 통해 다양한 LLM 모델을 사용하고, Agent 시스템을 통해 지능적으로 사용자 요청을 처리하는 백엔드 서버입니다.
+- **OpenRouter Integration**: 다양한 LLM 모델 사용 가능
+- **Tool Calling**: Calculator, Weather, Search 등의 도구 사용
+- **Session Management**: Redis를 사용한 세션 관리
+- **Chat History**: SQLite를 사용한 대화 기록 저장
+- **RESTful API**: FastAPI로 구현된 깔끔한 API
 
-### 주요 기능
+## 설치
 
-- **API Gateway**: FastAPI 기반의 RESTful API + SSE (Server-Sent Events) 지원
-- **OpenRouter 통합**: 다양한 LLM 모델 (Claude, GPT-4 등) 통합 관리
-- **Agent 시스템**: 
-  - Analyzer Agent: 사용자 요청 분석
-  - Planner Agent: 실행 계획 수립
-  - 추가 Agent 확장 가능
-- **실시간 스트리밍**: SSE를 통한 실시간 응답 스트리밍
-
-## 🚀 Quick Start
-
-### Option 1: Using pip (Recommended for beginners)
-
-1. Clone the repository and set up environment:
+1. 의존성 설치
 ```bash
-# Clone repository
-git clone <repository-url>
-cd LLM_practice
-
-# Copy environment variables
-cp .env.example .env
-# Edit .env and set your OPENROUTER_API_KEY
-```
-
-2. Run the server:
-```bash
-# Use the provided script
-./run_server.sh
-
-# Or manually:
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python main.py
+# 또는 uv 사용시
+uv pip install -r requirements.txt
 ```
 
-### Option 2: Using uv (Faster package manager)
-
-1. Install uv:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-2. Create Python environment and install dependencies:
-```bash
-# Create virtual environment
-uv venv
-
-# Activate virtual environment
-source .venv/bin/activate  # On macOS/Linux
-# or
-.venv\Scripts\activate  # On Windows
-
-# Install dependencies
-uv pip install -e .
-
-# Install dev dependencies
-uv pip install -e ".[dev]"
-```
-
-3. Copy environment variables:
+2. 환경 설정
 ```bash
 cp .env.example .env
+# .env 파일에서 OPENROUTER_API_KEY 설정
 ```
 
-4. Run the server:
+3. Redis 실행 (Docker 사용시)
 ```bash
-uv run python main.py
-# or if venv is activated
+docker run -d -p 6379:6379 redis:alpine
+```
+
+## 실행
+
+```bash
 python main.py
 ```
 
-## 📁 Project Structure
+서버가 실행되면:
+- API 문서: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-```
-.
-├── src/
-│   ├── api/         # API endpoints
-│   ├── agents/      # Agent implementations
-│   ├── core/        # Core configurations
-│   ├── db/          # Database models
-│   ├── services/    # Business logic
-│   └── utils/       # Utilities
-├── tests/           # Test files
-├── docs/            # Documentation
-├── main.py          # Application entry point
-├── pyproject.toml   # Project configuration
-└── .env.example     # Environment variables template
-```
+## API 사용법
 
-## 🛠️ Development
-
-### Run with auto-reload:
+### 1. 세션 생성
 ```bash
-uv run python main.py
+POST /api/chat/session
 ```
 
-### Run tests:
+### 2. 메시지 전송
 ```bash
-uv run pytest
+POST /api/chat/message
+Headers: X-Session-ID: {session_id}
+Body: {
+    "message": "What's the weather in Seoul?",
+    "use_tools": true
+}
 ```
 
-### Format code:
+### 3. 대화 기록 조회
 ```bash
-uv run black .
-uv run ruff check . --fix
+GET /api/chat/history/{session_id}
 ```
 
-### Type checking:
+### 4. 사용 가능한 도구 목록
 ```bash
-uv run mypy src/
+GET /api/chat/tools
 ```
 
-## 📡 API Usage
+## 테스트
 
-### Test the API
-
-Run the test script:
 ```bash
 python test_api.py
 ```
 
-### API Endpoints
+## 프로젝트 구조
 
-#### 1. Health Check
-```bash
-curl http://localhost:8000/health
+```
+app/
+├── core/           # 설정 및 핵심 모듈
+├── models/         # 데이터베이스 모델
+├── services/       # 외부 서비스 연동
+├── routers/        # API 엔드포인트
+├── agents/         # Agent 로직
+└── tools/          # Tool 구현
 ```
 
-#### 2. List Available Models
-```bash
-curl http://localhost:8000/api/v1/chat/models
-```
+## 사용 가능한 도구
 
-#### 3. Chat Completion (Regular)
-```bash
-curl -X POST http://localhost:8000/api/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": true
-  }'
-```
+1. **Calculator**: 수학 계산
+2. **Weather**: 날씨 정보 조회 (Mock)
+3. **Search**: 웹 검색 (Mock)
 
-#### 4. Chat Completion (Agent System)
-```bash
-curl -X POST http://localhost:8000/api/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "/agent Write a Python function"}],
-    "stream": true
-  }'
-```
+## 환경 변수
 
-### API Documentation
+- `OPENROUTER_API_KEY`: OpenRouter API 키 (필수)
+- `DATABASE_URL`: SQLite 데이터베이스 경로
+- `REDIS_URL`: Redis 연결 URL
+- `DEFAULT_MODEL`: 기본 LLM 모델
 
-Once the server is running:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-## 🏗️ Architecture
+## 아키텍처
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Client    │────▶│ API Gateway │────▶│   Agent     │
-└─────────────┘     └─────────────┘     │   Manager   │
-       SSE                │             └─────────────┘
-                          │                     │
-                          ▼                     ▼
-                   ┌─────────────┐     ┌─────────────┐
-                   │ OpenRouter  │     │   Agents    │
-                   └─────────────┘     │ - Analyzer  │
-                                       │ - Planner   │
-                                       │ - Executor  │
-                                       └─────────────┘
+│   Client    │────▶│   FastAPI   │────▶│    Agent    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │                     │
+                           ▼                     ▼
+                    ┌─────────────┐     ┌─────────────┐
+                    │    Redis    │     │ OpenRouter  │
+                    │  (Session)  │     │ (LLM + Tools)│
+                    └─────────────┘     └─────────────┘
+                           │                     
+                           ▼                     
+                    ┌─────────────┐
+                    │   SQLite    │
+                    │  (History)  │
+                    └─────────────┘
 ```
-
-### Components
-
-- **API Gateway**: FastAPI with SSE support
-- **LLM Routing**: OpenRouter integration
-- **Agent System**: Autonomous agents for task execution
-- **Caching**: Redis for session and response caching (planned)
-- **Database**: SQLite for metadata persistence (planned)
-- **Protocol**: JSON-RPC for inter-agent communication
-
-
-## 🚦 Development Status
-
-### Completed ✅
-- Project structure and dependency management
-- API Gateway with SSE support
-- OpenRouter integration module
-- Basic Agent system (Analyzer, Planner)
-- Streaming response handling
-
-### In Progress 🚧
-- Agent routing and response aggregation
-- Additional agent implementations
-
-### Planned 📋
-- Redis caching layer
-- SQLite database schema
-- Executor, Router, and Aggregator agents
-- Enhanced error handling
-- Performance optimizations
-
-## 🤝 Contributing
-
-This is a POC project. Feel free to open issues for suggestions or improvements.
-
-## 📝 License
-
-This project is under the MIT License.
