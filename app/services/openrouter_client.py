@@ -49,7 +49,7 @@ class OpenRouterClient:
                 if attempt > 0:
                     print(f"[DEBUG] Fallback attempt after error: {last_error}")
                 
-                # Make the API call
+                # Make the API call0
                 response = await self.client.chat.completions.create(
                     model=current_model,
                     messages=messages,
