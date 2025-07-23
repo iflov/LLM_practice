@@ -1,11 +1,15 @@
 from typing import List, Dict, Any, Optional
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_fallback_client import OpenRouterFallbackClient
+from app.services.mock_client import MockOpenRouterClient
 from app.services.session_manager import session_manager
 from app.models.database import ChatHistory, AsyncSessionLocal
 from app.core.config import settings
 from sqlalchemy import select
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ChatAgent:
@@ -15,6 +19,10 @@ class ChatAgent:
             self.openrouter_client = OpenRouterFallbackClient()
         else:
             self.openrouter_client = OpenRouterClient()
+        
+        # Mock 클라이언트 (Rate limit 시 사용)
+        self.mock_client = MockOpenRouterClient()
+        self.use_mock_mode = False
         
     async def process_message(
         self,
@@ -51,23 +59,57 @@ class ChatAgent:
                     "content": msg["content"]
                 })
         
-        # Get response from OpenRouter
-        if isinstance(self.openrouter_client, OpenRouterFallbackClient):
-            # Fallback client 사용
-            response = await self.openrouter_client.chat_completion_with_fallback(
+        # Get response from OpenRouter (with rate limit handling)
+        response = None
+        
+        # Mock 모드가 활성화된 경우
+        if self.use_mock_mode:
+            logger.info("Using mock client due to rate limits")
+            response = await self.mock_client.chat_completion_with_fallback(
                 messages=chat_messages,
                 use_tools=use_tools
             )
         else:
-            # 기존 client 사용
-            if use_tools:
-                response = await self.openrouter_client.chat_completion_with_tools(
-                    messages=chat_messages
-                )
-            else:
-                response = await self.openrouter_client.simple_chat_completion(
-                    messages=chat_messages
-                )
+            try:
+                if isinstance(self.openrouter_client, OpenRouterFallbackClient):
+                    # Fallback client 사용
+                    response = await self.openrouter_client.chat_completion_with_fallback(
+                        messages=chat_messages,
+                        use_tools=use_tools
+                    )
+                else:
+                    # 기존 client 사용
+                    if use_tools:
+                        response = await self.openrouter_client.chat_completion_with_tools(
+                            messages=chat_messages
+                        )
+                    else:
+                        response = await self.openrouter_client.simple_chat_completion(
+                            messages=chat_messages
+                        )
+                
+                # Rate limit 감지
+                if response and response.get("content", ""):
+                    content = response["content"]
+                    if "Rate limit exceeded" in content or "All models failed" in content:
+                        logger.warning("Rate limit detected, switching to mock mode")
+                        self.use_mock_mode = True
+                        response = await self.mock_client.chat_completion_with_fallback(
+                            messages=chat_messages,
+                            use_tools=use_tools
+                        )
+                        
+            except Exception as e:
+                error_msg = str(e)
+                if "Rate limit exceeded" in error_msg or "429" in error_msg:
+                    logger.warning("Rate limit exception, switching to mock mode")
+                    self.use_mock_mode = True
+                    response = await self.mock_client.chat_completion_with_fallback(
+                        messages=chat_messages,
+                        use_tools=use_tools
+                    )
+                else:
+                    raise
         
         # Safely extract content and tool_calls
         content = response.get("content", "") if response else ""
@@ -135,24 +177,46 @@ class ChatAgent:
         limit: int = 50
     ) -> List[Dict[str, Any]]:
         """Get chat history from database"""
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(ChatHistory)
-                .where(ChatHistory.session_id == session_id)
-                .order_by(ChatHistory.created_at.desc())
-                .limit(limit)
-            )
-            
-            history = []
-            for chat in result.scalars():
-                history.append({
-                    "id": chat.id,
-                    "user_message": chat.user_message,
-                    "assistant_message": chat.assistant_message,
-                    "tools_used": chat.tools_used,
-                    "created_at": chat.created_at.isoformat(),
-                    "metadata": chat.metadata
-                })
-            
-            # Reverse to get chronological order
-            return history[::-1]
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(ChatHistory)
+                    .where(ChatHistory.session_id == session_id)
+                    .order_by(ChatHistory.created_at.desc())
+                    .limit(limit)
+                )
+                
+                history = []
+                for chat in result.scalars():
+                    # Safely handle metadata
+                    metadata = chat.metadata if chat.metadata else {}
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except:
+                            metadata = {}
+                    
+                    # Safely handle tools_used
+                    tools_used = chat.tools_used if chat.tools_used else []
+                    if isinstance(tools_used, str):
+                        try:
+                            tools_used = json.loads(tools_used)
+                        except:
+                            tools_used = []
+                    
+                    history.append({
+                        "id": chat.id,
+                        "user_message": chat.user_message or "",
+                        "assistant_message": chat.assistant_message or "",
+                        "tools_used": tools_used,
+                        "model_used": chat.model_used or "unknown",
+                        "created_at": chat.created_at.isoformat() if chat.created_at else "",
+                        "metadata": metadata
+                    })
+                
+                # Reverse to get chronological order
+                return history[::-1]
+                
+        except Exception as e:
+            logger.error(f"Error getting chat history: {str(e)}")
+            return []

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # Model Fallback Configuration
     fallback_enabled: bool = True
     fallback_free_only: bool = True
+    fallback_models: str = "deepseek/deepseek-chat-v3-0324:free,google/gemini-2.0-flash-exp:free,qwen/qwen3-235b-a22b-07-25:free"
+    
+    @property
+    def fallback_models_list(self) -> List[str]:
+        """Fallback models as a list"""
+        return [model.strip() for model in self.fallback_models.split(",") if model.strip()]
 
 
 settings = Settings()

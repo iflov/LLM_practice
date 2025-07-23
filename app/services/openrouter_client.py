@@ -25,36 +25,59 @@ class OpenRouterClient:
     ) -> Dict[str, Any]:
         """Chat completion with tool calling support"""
         
-        try:
-            # Get all available tools in OpenAI format
-            tools = get_tools_for_openai()
-            
-            # Debug logging
-            print(f"[DEBUG] Using model: {model or settings.default_model}")
-            print(f"[DEBUG] API Key (first 10 chars): {settings.openrouter_api_key[:10]}...")
-            print(f"[DEBUG] Base URL: {settings.openrouter_base_url}")
-            
-            # Make the API call
-            response = await self.client.chat.completions.create(
-                model=model or settings.default_model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",  # Let the model decide when to use tools
-                temperature=temperature or settings.temperature,
-                max_tokens=max_tokens or settings.max_tokens
-            )
-            
-            # Debug response
-            print(f"[DEBUG] Response: {response}")
-            
-        except Exception as e:
-            print(f"OpenRouter API Error: {str(e)}")
-            print(f"[DEBUG] Error type: {type(e).__name__}")
-            return {
-                "content": f"Error: API call failed - {str(e)}",
-                "tool_calls": [],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+        # Determine models to try
+        target_model = model or settings.default_model
+        models_to_try = [target_model]
+        
+        # Add fallback models if enabled
+        if settings.fallback_enabled and target_model not in settings.fallback_models_list:
+            models_to_try.extend(settings.fallback_models_list)
+        elif settings.fallback_enabled:
+            # If target model is in fallback list, try others as backup
+            fallback_list = [m for m in settings.fallback_models_list if m != target_model]
+            models_to_try.extend(fallback_list)
+        
+        last_error = None
+        
+        for attempt, current_model in enumerate(models_to_try):
+            try:
+                # Get all available tools in OpenAI format
+                tools = get_tools_for_openai()
+                
+                # Debug logging
+                print(f"[DEBUG] Attempt {attempt + 1}: Using model: {current_model}")
+                if attempt > 0:
+                    print(f"[DEBUG] Fallback attempt after error: {last_error}")
+                
+                # Make the API call
+                response = await self.client.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",  # Let the model decide when to use tools
+                    temperature=temperature or settings.temperature,
+                    max_tokens=max_tokens or settings.max_tokens
+                )
+                
+                # If successful, break the loop
+                print(f"[DEBUG] Success with model: {current_model}")
+                break
+                
+            except Exception as e:
+                last_error = str(e)
+                print(f"[DEBUG] Model {current_model} failed: {str(e)}")
+                
+                # If this is the last model to try, return error
+                if attempt == len(models_to_try) - 1:
+                    print(f"[ERROR] All models failed. Last error: {str(e)}")
+                    return {
+                        "content": f"Error: All models failed. Last error: {str(e)}",
+                        "tool_calls": [],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    }
+                
+                # Continue to next model
+                continue
         
         # Extract the response
         if not response.choices:
@@ -155,28 +178,53 @@ class OpenRouterClient:
     ) -> Dict[str, Any]:
         """Simple chat completion without tools"""
         
-        try:
-            # Debug logging
-            print(f"[DEBUG Simple] Using model: {model or settings.default_model}")
-            print(f"[DEBUG Simple] Messages: {messages}")
-            
-            response = await self.client.chat.completions.create(
-                model=model or settings.default_model,
-                messages=messages,
-                temperature=temperature or settings.temperature,
-                max_tokens=max_tokens or settings.max_tokens
-            )
-            
-            print(f"[DEBUG Simple] Response: {response}")
-            
-        except Exception as e:
-            print(f"OpenRouter API Error: {str(e)}")
-            print(f"[DEBUG Simple] Error type: {type(e).__name__}")
-            return {
-                "content": f"Error: API call failed - {str(e)}",
-                "tool_calls": [],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+        # Determine models to try
+        target_model = model or settings.default_model
+        models_to_try = [target_model]
+        
+        # Add fallback models if enabled
+        if settings.fallback_enabled and target_model not in settings.fallback_models_list:
+            models_to_try.extend(settings.fallback_models_list)
+        elif settings.fallback_enabled:
+            # If target model is in fallback list, try others as backup
+            fallback_list = [m for m in settings.fallback_models_list if m != target_model]
+            models_to_try.extend(fallback_list)
+        
+        last_error = None
+        
+        for attempt, current_model in enumerate(models_to_try):
+            try:
+                # Debug logging
+                print(f"[DEBUG Simple] Attempt {attempt + 1}: Using model: {current_model}")
+                if attempt > 0:
+                    print(f"[DEBUG Simple] Fallback attempt after error: {last_error}")
+                
+                response = await self.client.chat.completions.create(
+                    model=current_model,
+                    messages=messages,
+                    temperature=temperature or settings.temperature,
+                    max_tokens=max_tokens or settings.max_tokens
+                )
+                
+                # If successful, break the loop
+                print(f"[DEBUG Simple] Success with model: {current_model}")
+                break
+                
+            except Exception as e:
+                last_error = str(e)
+                print(f"[DEBUG Simple] Model {current_model} failed: {str(e)}")
+                
+                # If this is the last model to try, return error
+                if attempt == len(models_to_try) - 1:
+                    print(f"[ERROR Simple] All models failed. Last error: {str(e)}")
+                    return {
+                        "content": f"Error: All models failed. Last error: {str(e)}",
+                        "tool_calls": [],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    }
+                
+                # Continue to next model
+                continue
         
         if not response.choices:
             return {

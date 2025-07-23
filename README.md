@@ -5,6 +5,7 @@ FastAPI 기반 LLM Agent 시스템 POC - OpenRouter와 LangChain을 활용한 To
 ## 특징
 
 - **OpenRouter Integration**: 다양한 LLM 모델 사용 가능
+- **Fallback System**: 모델 실패 시 자동으로 대체 모델 사용
 - **Tool Calling**: Calculator, Weather, Search 등의 도구 사용
 - **Session Management**: Redis를 사용한 세션 관리
 - **Chat History**: SQLite를 사용한 대화 기록 저장
@@ -126,10 +127,19 @@ app/
 - **[프로젝트 구조 상세](PROJECT_STRUCTURE.md)** - 전체 디렉토리 구조와 각 파일 설명
 - **[아키텍처 개요](ARCHITECTURE_OVERVIEW.md)** - 시스템 설계와 데이터 플로우
 - **[개발 가이드](DEVELOPMENT_GUIDE.md)** - 새 기능 추가 및 커스터마이징 방법
+- **[Fallback 시스템 가이드](FALLBACK_GUIDE.md)** - 모델 장애 시 자동 대체 시스템
 
 ## 🔥 현재 설정
 
-- **모델**: `deepseek/deepseek-chat-v3-0324:free` (Tool Calling 지원)
+- **기본 모델**: `deepseek/deepseek-chat-v3-0324:free` (Tool Calling 지원)
+- **Fallback 시스템**: ✅ 활성화 (모델 실패 시 자동 대체)
 - **세션 저장**: Redis (TTL 1시간)
 - **대화 기록**: SQLite (`chat_history.db`)
 - **포트**: 8000
+
+### 🔄 Fallback 모델 순서
+1. `deepseek/deepseek-chat-v3-0324:free` (기본)
+2. `google/gemini-2.0-flash-exp:free` (빠른 응답)
+3. `qwen/qwen3-235b-a22b-07-25:free` (큰 컨텍스트)
+
+**Fallback 테스트**: `python test_fallback.py`
