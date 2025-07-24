@@ -90,13 +90,30 @@ class OpenRouterFallbackClient:
         # Tool이 필요한 경우 OpenAI 형식으로 가져오기
         tools = get_tools_for_openai() if use_tools else None
         
-        # 사용할 모델 리스트 가져오기
+        # DEFAULT_MODEL을 먼저 시도할 모델 리스트 생성
+        models_to_try = []
+        
+        # DEFAULT_MODEL 정보 가져오기
+        default_model_config = get_model_by_id(settings.default_model)
+        if default_model_config:
+            # Tool 필요 여부와 무료 모델 여부 확인
+            if (not use_tools or default_model_config.supports_tools) and \
+               (not free_only or default_model_config.is_free):
+                models_to_try.append(default_model_config)
+                logger.info(f"Will try DEFAULT_MODEL first: {settings.default_model}")
+        
+        # Fallback 모델 리스트 가져오기
         fallback_models = get_fallback_models(
             require_tools=use_tools,
             free_only=free_only
         )
         
-        if not fallback_models:
+        # DEFAULT_MODEL이 이미 리스트에 있으면 제거 (중복 방지)
+        for model in fallback_models:
+            if model.id != settings.default_model:
+                models_to_try.append(model)
+        
+        if not models_to_try:
             return {
                 "content": "No available models found",
                 "tool_calls": [],
@@ -106,7 +123,7 @@ class OpenRouterFallbackClient:
         
         # 각 모델로 순서대로 시도
         last_error = None
-        for model_config in fallback_models:
+        for model_config in models_to_try:
             try:
                 result = await self._try_model(
                     model_id=model_config.id,
@@ -265,19 +282,36 @@ class OpenRouterFallbackClient:
         # Tool이 필요한 경우 OpenAI 형식으로 가져오기
         tools = get_tools_for_openai() if use_tools else None
         
-        # 사용할 모델 리스트 가져오기
+        # DEFAULT_MODEL을 먼저 시도할 모델 리스트 생성
+        models_to_try = []
+        
+        # DEFAULT_MODEL 정보 가져오기
+        default_model_config = get_model_by_id(settings.default_model)
+        if default_model_config:
+            # Tool 필요 여부와 무료 모델 여부 확인
+            if (not use_tools or default_model_config.supports_tools) and \
+               (not free_only or default_model_config.is_free):
+                models_to_try.append(default_model_config)
+                logger.info(f"Will try DEFAULT_MODEL first: {settings.default_model}")
+        
+        # Fallback 모델 리스트 가져오기
         fallback_models = get_fallback_models(
             require_tools=use_tools,
             free_only=free_only
         )
         
-        if not fallback_models:
+        # DEFAULT_MODEL이 이미 리스트에 있으면 제거 (중복 방지)
+        for model in fallback_models:
+            if model.id != settings.default_model:
+                models_to_try.append(model)
+        
+        if not models_to_try:
             yield {"type": "error", "error": "No available models found"}
             return
         
         # 각 모델로 순서대로 시도
         last_error = None
-        for model_config in fallback_models:
+        for model_config in models_to_try:
             try:
                 logger.info(f"Trying streaming with model: {model_config.id}")
                 

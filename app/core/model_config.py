@@ -41,6 +41,14 @@ AVAILABLE_MODELS = [
         supports_tools=True,
         is_free=True,
         context_length=1000000,
+        priority=3
+    ),
+    ModelConfig(
+        id="google/gemini-2.0-flash-exp:free",
+        name="Gemini 2.0 Flash Experimental",
+        supports_tools=True,
+        is_free=True,
+        context_length=1000000,
         priority=2
     ),
     ModelConfig(
@@ -59,7 +67,7 @@ AVAILABLE_MODELS = [
         supports_tools=False,
         is_free=True,
         context_length=8192,
-        priority=3
+        priority=5
     ),
     ModelConfig(
         id="qwen/qwen3-235b-a22b-07-25:free",
@@ -67,7 +75,7 @@ AVAILABLE_MODELS = [
         supports_tools=False,
         is_free=True,
         context_length=262144,
-        priority=4
+        priority=6
     ),
     ModelConfig(
         id="tngtech/deepseek-r1t2-chimera:free",
@@ -75,7 +83,7 @@ AVAILABLE_MODELS = [
         supports_tools=False,
         is_free=True,
         context_length=32768,
-        priority=5
+        priority=7
     ),
 ]
 
