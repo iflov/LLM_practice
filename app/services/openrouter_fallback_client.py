@@ -2,7 +2,7 @@
 OpenRouter client with model fallback support
 """
 from openai import AsyncOpenAI
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 import json
 import asyncio
 from app.core.config import settings
@@ -17,13 +17,16 @@ class OpenRouterFallbackClient:
     """Model fallback을 지원하는 OpenRouter 클라이언트"""
     
     def __init__(self):
+        # Connection pooling과 timeout 설정 추가
         self.client = AsyncOpenAI(
             base_url=settings.openrouter_base_url,
             api_key=settings.openrouter_api_key,
             default_headers={
-                "HTTP-Referer": "http://localhost:8000",
+                "HTTP-Referer": "http://localhost:8000",  # Fixed port
                 "X-Title": "Agent LLM POC"
-            }
+            },
+            timeout=30.0,  # 30초 타임아웃
+            max_retries=1  # 재시도 1회
         )
         
     async def _try_model(
@@ -163,8 +166,8 @@ class OpenRouterFallbackClient:
         if hasattr(message, 'tool_calls') and message.tool_calls:
             tool_results = []
             
-            # 각 tool call 실행
-            for tool_call in message.tool_calls:
+            # 병렬로 tool 실행을 위한 태스크 준비
+            async def execute_tool(tool_call):
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
                 
@@ -177,12 +180,22 @@ class OpenRouterFallbackClient:
                     except Exception as e:
                         result = {"error": f"Tool execution failed: {str(e)}"}
                 
-                tool_results.append({
+                return {
                     "tool_call_id": tool_call.id,
                     "tool_name": tool_name,
                     "tool_args": tool_args,
                     "result": result
-                })
+                }
+            
+            # 모든 tool을 병렬로 실행
+            if len(message.tool_calls) > 1:
+                # 여러 tool이 있으면 병렬 실행
+                tool_results = await asyncio.gather(
+                    *[execute_tool(tool_call) for tool_call in message.tool_calls]
+                )
+            else:
+                # 단일 tool은 그냥 실행
+                tool_results = [await execute_tool(message.tool_calls[0])]
             
             # Tool 결과를 메시지에 추가
             messages.append({
@@ -238,3 +251,146 @@ class OpenRouterFallbackClient:
                     "total_tokens": getattr(response.usage, 'total_tokens', 0)
                 }
             }
+    
+    async def stream_chat_completion_with_fallback(
+        self,
+        messages: List[Dict[str, str]],
+        use_tools: bool = True,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        free_only: bool = True
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Streaming chat completion with fallback support"""
+        
+        # Tool이 필요한 경우 OpenAI 형식으로 가져오기
+        tools = get_tools_for_openai() if use_tools else None
+        
+        # 사용할 모델 리스트 가져오기
+        fallback_models = get_fallback_models(
+            require_tools=use_tools,
+            free_only=free_only
+        )
+        
+        if not fallback_models:
+            yield {"type": "error", "error": "No available models found"}
+            return
+        
+        # 각 모델로 순서대로 시도
+        last_error = None
+        for model_config in fallback_models:
+            try:
+                logger.info(f"Trying streaming with model: {model_config.id}")
+                
+                kwargs = {
+                    "model": model_config.id,
+                    "messages": messages,
+                    "temperature": temperature or settings.temperature,
+                    "max_tokens": max_tokens or settings.max_tokens,
+                    "stream": True
+                }
+                
+                # Tool이 필요한 경우에만 추가
+                if tools and model_config.supports_tools:
+                    kwargs["tools"] = tools
+                    kwargs["tool_choice"] = "auto"
+                
+                stream = await self.client.chat.completions.create(**kwargs)
+                
+                # 성공한 경우 스트림 처리
+                full_content = ""
+                tool_calls = []
+                
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        
+                        # 컨텐츠 스트리밍
+                        if delta.content:
+                            full_content += delta.content
+                            yield {"type": "token", "content": delta.content}
+                        
+                        # Tool call 처리
+                        if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                            for tool_call in delta.tool_calls:
+                                if tool_call.function.name:
+                                    tool_calls.append({
+                                        "id": tool_call.id,
+                                        "name": tool_call.function.name,
+                                        "arguments": ""
+                                    })
+                                if tool_call.function.arguments:
+                                    tool_calls[-1]["arguments"] += tool_call.function.arguments
+                
+                # Tool 실행 (있는 경우)
+                if tool_calls:
+                    for tool_call in tool_calls:
+                        try:
+                            tool_name = tool_call["name"]
+                            tool_args = json.loads(tool_call["arguments"])
+                            
+                            yield {"type": "tool_call", "tool": tool_name, "args": tool_args}
+                            
+                            tool = get_tool(tool_name)
+                            if tool:
+                                result = await tool.execute(**tool_args)
+                                yield {"type": "tool_result", "tool": tool_name, "result": result}
+                            else:
+                                yield {"type": "tool_result", "tool": tool_name, "result": {"error": f"Tool '{tool_name}' not found"}}
+                        except Exception as e:
+                            yield {"type": "tool_result", "tool": tool_name, "result": {"error": str(e)}}
+                    
+                    # Tool 결과로 다시 스트리밍 (필요한 경우)
+                    messages.append({
+                        "role": "assistant",
+                        "content": full_content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": tc["arguments"]
+                                }
+                            }
+                            for tc in tool_calls
+                        ]
+                    })
+                    
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["name"]
+                        tool_args = json.loads(tool_call["arguments"])
+                        tool = get_tool(tool_name)
+                        if tool:
+                            result = await tool.execute(**tool_args)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": json.dumps(result)
+                            })
+                    
+                    # Tool 결과로 다시 스트리밍
+                    final_stream = await self.client.chat.completions.create(
+                        model=model_config.id,
+                        messages=messages,
+                        temperature=temperature or settings.temperature,
+                        max_tokens=max_tokens or settings.max_tokens,
+                        stream=True
+                    )
+                    
+                    async for chunk in final_stream:
+                        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            yield {"type": "token", "content": chunk.choices[0].delta.content}
+                
+                # 완료 신호
+                yield {"type": "done", "model_used": model_config.id}
+                return
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Streaming with model {model_config.id} failed: {last_error}")
+                
+                if "Invalid API key" in last_error:
+                    break  # API 키 문제는 더 시도해도 소용없음
+        
+        # 모든 모델이 실패한 경우
+        yield {"type": "error", "error": f"All models failed. Last error: {last_error}"}

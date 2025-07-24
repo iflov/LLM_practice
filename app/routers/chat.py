@@ -1,6 +1,9 @@
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator
+import json
+import asyncio
 from app.agents.chat_agent import ChatAgent
 from app.services.session_manager import session_manager
 from app.tools import get_all_tools
@@ -19,6 +22,8 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    
     response: str
     tools_used: List[Dict[str, Any]]
     session_id: str
@@ -37,7 +42,7 @@ async def create_session() -> SessionResponse:
 
 
 @router.post("/message")
-async def send_message(request: ChatRequest) -> ChatResponse:
+async def send_message(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     """Send a message to the chat agent"""
     
     # Get or create session
@@ -147,3 +152,54 @@ async def list_available_models() -> Dict[str, Any]:
         ],
         "fallback_order": [model.id for model in fallback_models]
     }
+
+
+@router.post("/message/stream")
+async def send_message_stream(request: ChatRequest):
+    """Send a message to the chat agent with streaming response"""
+    
+    # Get or create session
+    session_id = request.session_id
+    if not session_id:
+        session_id = await session_manager.create_session()
+    else:
+        # Check if session exists
+        session_data = await session_manager.get_session(session_id)
+        if not session_data:
+            session_id = await session_manager.create_session()
+    
+    async def generate() -> AsyncGenerator[str, None]:
+        """Generate streaming response"""
+        try:
+            # Send initial metadata
+            yield f"data: {json.dumps({'type': 'metadata', 'session_id': session_id})}\n\n"
+            
+            # Process message with streaming
+            async for chunk in chat_agent.process_message_stream(
+                session_id=session_id,
+                user_message=request.message,
+                use_tools=request.use_tools
+            ):
+                if chunk["type"] == "token":
+                    yield f"data: {json.dumps({'type': 'token', 'content': chunk['content']})}\n\n"
+                elif chunk["type"] == "tool_call":
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': chunk['tool'], 'args': chunk['args']})}\n\n"
+                elif chunk["type"] == "tool_result":
+                    yield f"data: {json.dumps({'type': 'tool_result', 'tool': chunk['tool'], 'result': chunk['result']})}\n\n"
+                elif chunk["type"] == "done":
+                    yield f"data: {json.dumps({'type': 'done', 'model_used': chunk.get('model_used', 'unknown')})}\n\n"
+                    
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )

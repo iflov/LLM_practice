@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "Agent LLM POC"
     app_env: str = "development"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8002
     log_level: str = "INFO"
     
     # Model

@@ -16,7 +16,7 @@ docker run -d -p 6379:6379 redis
 python main.py
 
 # 3. API 문서 확인
-open http://localhost:8000/docs
+open http://localhost:8002/docs
 ```
 
 ## 📡 주요 API
@@ -70,12 +70,12 @@ ps aux | grep python
 import httpx
 async with httpx.AsyncClient() as client:
     # 세션 생성
-    r = await client.post("http://localhost:8000/api/chat/session")
+    r = await client.post("http://localhost:8002/api/chat/session")
     session_id = r.json()["session_id"]
     
     # 메시지 전송
     r = await client.post(
-        "http://localhost:8000/api/chat/message",
+        "http://localhost:8002/api/chat/message",
         json={"session_id": session_id, "message": "Hello", "use_tools": True}
     )
 ```
@@ -83,10 +83,10 @@ async with httpx.AsyncClient() as client:
 ### curl로 테스트
 ```bash
 # 세션 생성
-curl -X POST http://localhost:8000/api/chat/session
+curl -X POST http://localhost:8002/api/chat/session
 
 # 메시지 전송
-curl -X POST http://localhost:8000/api/chat/message \
+curl -X POST http://localhost:8002/api/chat/message \
   -H "Content-Type: application/json" \
   -d '{"session_id":"SESSION_ID","message":"Hello","use_tools":true}'
 ```
@@ -105,7 +105,7 @@ curl -X POST http://localhost:8000/api/chat/message \
 | 문제 | 해결 방법 |
 |------|----------|
 | "No module named 'greenlet'" | `pip install greenlet` |
-| "Address already in use" | `lsof -i :8000` → `kill -9 PID` |
+| "Address already in use" | `lsof -i :8002` → `kill -9 PID` |
 | "Redis connection refused" | Redis 서버 실행 확인 |
 | "Invalid API key" | `.env` 파일의 OPENROUTER_API_KEY 확인 |
 

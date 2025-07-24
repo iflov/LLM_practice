@@ -244,7 +244,7 @@ class OpenRouterClientWithFallback:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:8000",
+            "HTTP-Referer": "http://localhost:8002",
             "X-Title": "LLM Agent POC"
         }
         

@@ -1,19 +1,23 @@
 from openai import AsyncOpenAI
 from typing import List, Dict, Any, Optional
 import json
+import asyncio
 from app.core.config import settings
 from app.tools import get_tools_for_openai, get_tool
 
 
 class OpenRouterClient:
     def __init__(self):
+        # Connection pooling과 timeout 설정 추가
         self.client = AsyncOpenAI(
             base_url=settings.openrouter_base_url,
             api_key=settings.openrouter_api_key,
             default_headers={
-                "HTTP-Referer": "http://localhost:8000",  # Optional
+                "HTTP-Referer": "http://localhost:8000",  # Fixed port
                 "X-Title": "Agent LLM POC"  # Optional
-            }
+            },
+            timeout=30.0,  # 30초 타임아웃
+            max_retries=1  # 재시도 1회
         )
     
     async def chat_completion_with_tools(
@@ -93,8 +97,8 @@ class OpenRouterClient:
         if message.tool_calls:
             tool_results = []
             
-            # Execute each tool call
-            for tool_call in message.tool_calls:
+            # 병렬로 tool 실행을 위한 태스크 준비
+            async def execute_tool(tool_call):
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
                 
@@ -108,12 +112,22 @@ class OpenRouterClient:
                     except Exception as e:
                         result = {"error": f"Tool execution failed: {str(e)}"}
                 
-                tool_results.append({
+                return {
                     "tool_call_id": tool_call.id,
                     "tool_name": tool_name,
                     "tool_args": tool_args,
                     "result": result
-                })
+                }
+            
+            # 모든 tool을 병렬로 실행
+            if len(message.tool_calls) > 1:
+                # 여러 tool이 있으면 병렬 실행
+                tool_results = await asyncio.gather(
+                    *[execute_tool(tool_call) for tool_call in message.tool_calls]
+                )
+            else:
+                # 단일 tool은 그냥 실행
+                tool_results = [await execute_tool(message.tool_calls[0])]
             
             # Add the assistant's message with tool calls to history
             messages.append({

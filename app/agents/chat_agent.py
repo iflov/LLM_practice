@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 from app.services.openrouter_client import OpenRouterClient
 from app.services.openrouter_fallback_client import OpenRouterFallbackClient
 from app.services.mock_client import MockOpenRouterClient
@@ -8,6 +8,8 @@ from app.core.config import settings
 from sqlalchemy import select
 import json
 import logging
+import asyncio
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +130,8 @@ class ChatAgent:
             }
         )
         
-        # Save to database
-        await self._save_to_database(
+        # 백그라운드로 DB 저장 (성능 향상)
+        asyncio.create_task(self._save_to_database(
             session_id=session_id,
             user_message=user_message,
             assistant_message=content,
@@ -140,7 +142,7 @@ class ChatAgent:
                 "usage": usage,
                 "model": model_used
             }
-        )
+        ))
         
         return {
             "content": content,
@@ -148,6 +150,128 @@ class ChatAgent:
             "usage": usage,
             "model_used": model_used
         }
+    
+    async def process_message_stream(
+        self,
+        session_id: str,
+        user_message: str,
+        use_tools: bool = True
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Process a user message with streaming response"""
+        
+        # Save user message to session FIRST
+        await session_manager.add_message(
+            session_id,
+            "user",
+            user_message
+        )
+        
+        # Get session context (now includes the new message)
+        messages = await session_manager.get_messages(session_id, limit=10)
+        
+        # Convert to OpenAI format
+        chat_messages = []
+        
+        # Add system message first
+        chat_messages.append({
+            "role": "system",
+            "content": "You are a helpful AI assistant with access to various tools. Remember the conversation context and user information shared in previous messages."
+        })
+        
+        # Add conversation history
+        for msg in messages:
+            if msg["role"] in ["user", "assistant"]:
+                chat_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        try:
+            # Stream response from client
+            if self.use_mock_mode:
+                # Mock doesn't support streaming yet, so simulate it
+                response = await self.mock_client.chat_completion_with_fallback(
+                    messages=chat_messages,
+                    use_tools=use_tools
+                )
+                # Simulate streaming
+                content = response.get("content", "")
+                for i in range(0, len(content), 10):  # Stream in chunks of 10 chars
+                    yield {"type": "token", "content": content[i:i+10]}
+                    await asyncio.sleep(0.01)  # Small delay to simulate streaming
+                
+                for tool_call in response.get("tool_calls", []):
+                    yield {"type": "tool_call", "tool": tool_call.get("tool_name"), "args": tool_call.get("tool_args")}
+                    yield {"type": "tool_result", "tool": tool_call.get("tool_name"), "result": tool_call.get("result")}
+                
+                yield {"type": "done", "model_used": response.get("model_used", "unknown")}
+                
+                # Save to session and DB in background
+                asyncio.create_task(self._save_stream_result(
+                    session_id, content, response.get("tool_calls", []), 
+                    response.get("usage", {}), response.get("model_used", "unknown")
+                ))
+            else:
+                # Real streaming from OpenRouter
+                if isinstance(self.openrouter_client, OpenRouterFallbackClient):
+                    # Streaming with fallback
+                    async for chunk in self.openrouter_client.stream_chat_completion_with_fallback(
+                        messages=chat_messages,
+                        use_tools=use_tools
+                    ):
+                        yield chunk
+                else:
+                    # Direct streaming (not implemented yet in base client)
+                    # Fall back to non-streaming for now
+                    response = await self.openrouter_client.chat_completion_with_tools(
+                        messages=chat_messages
+                    ) if use_tools else await self.openrouter_client.simple_chat_completion(
+                        messages=chat_messages
+                    )
+                    
+                    content = response.get("content", "")
+                    for i in range(0, len(content), 10):
+                        yield {"type": "token", "content": content[i:i+10]}
+                        await asyncio.sleep(0.01)
+                    
+                    yield {"type": "done", "model_used": response.get("model_used", settings.default_model)}
+                    
+        except Exception as e:
+            yield {"type": "error", "error": str(e)}
+    
+    async def _save_stream_result(
+        self,
+        session_id: str,
+        content: str,
+        tool_calls: List[Dict],
+        usage: Dict,
+        model_used: str
+    ):
+        """Save streaming result to session and database"""
+        await session_manager.add_message(
+            session_id,
+            "assistant",
+            content,
+            metadata={
+                "tool_calls": tool_calls,
+                "usage": usage,
+                "model_used": model_used
+            }
+        )
+        
+        # Save to database
+        await self._save_to_database(
+            session_id=session_id,
+            user_message="",  # Already saved
+            assistant_message=content,
+            tools_used=[tc.get("tool_name", "") for tc in tool_calls if isinstance(tc, dict)],
+            metadata={
+                "content": content,
+                "tool_calls": tool_calls,
+                "usage": usage,
+                "model": model_used
+            }
+        )
     
     async def _save_to_database(
         self,

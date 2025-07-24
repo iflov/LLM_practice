@@ -44,6 +44,8 @@ class CurrentModelResponse(BaseModel):
 
 
 class ModelStatusUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    
     model_id: str
     action: str  # "enable", "disable", "reset"
 
